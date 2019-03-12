@@ -132,7 +132,7 @@ To be fully prepared for the Elastic Certified Engineer exam, candidates should 
 
 -	Write and execute pipeline aggregations
 
-	#### Mappings and Text Analysis
+#### Mappings and Text Analysis
 
 -	Define a mapping that satisfies a given set of requirements
 
