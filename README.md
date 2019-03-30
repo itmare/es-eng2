@@ -362,23 +362,277 @@ DELETE my_refresh_test
 2.Field Modeling
 ----------------
 
+###### kibana console을 통해서 **blogs** index의 mapping을 확인해보고, 어떤 data type을 가지고 있는지 확인해보자
+
+<details><summary> 정답 </summary> - data type이 `date`인 `publish_date` field를 제외하고 모든 field의 data type은 `text`이다.</details>
+
+<br>
+
+###### 다음의 질문은 어떤 과목에 대한 학생의 설문지이다. 그 아래 dataset은 설문에 대한 답변 중 하나이다.
+
+-	"너의 직업은 무엇인가?"
+-	1-10중에 training course rate은?
+-	추가 커멘트는?
+-	트레이닝을 참가하기 위해 얼마나 멀리서 왔는가?
+
+```shell
+{
+  "job_title": "Elasticsearch Engineer",
+  "course_rating": 9,
+  "comments": "Great class. I want to get certified now!",
+  "miles_travelled": "0-25"
+}
+```
+
+###### `job_title` field에 대한 적절한 data type은 무엇인가?
+
+<details><summary> 정답 </summary>
+
+-	`text`, `keyword`: 유저가 원하는 아무것이나 넣을 수 있을 떄. (만약, UI에 고정된 숫자와 함께 drop-down 바가 있다면, `keyword`가 적절할 것이다.)
+
+</details>
+
+###### `comments` field에 대한 적절한 data type은 무엇인가?
+
+<details><summary> 정답 </summary>
+
+-	`text`: free-form text는 text
+
+</details>
+
+###### `miles_travelled` field에 대한 적절한 data type은 무엇인가?
+
+<details><summary> 정답 </summary>
+
+-	`integer_range`: 범위처럼 보이는 것은 range
+
+</details>
+
+<br>
+
+###### **surveys** 이름으로 index를 다음의 조건에 맞게 생성해라.
+
+-	1) mapping type은 "\_doc"
+-	2) **job_title** field는 **text** 와 **keyword** 로 매핑해라.
+-	3) **miles_travelled** field는 **integer_range** 로 매핑해라.
+-	4) field name 끝에 **_rating** 으로 끝나는 field는 **integer** 로 **dynamic하게** 매핑해라.
+-	5) 마지막으로, 아직 매핑되지 않은 string field들은 **dynamic하게** **keyword** 로 매핑해라. (the field is **not** indexed.)
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT surveys
+{
+  "mappings": {
+    "_doc":{   # 1)
+      "properties":{
+        "job_title":{  # 2)
+          "type":"text",
+          "fields":{
+            "keyword":{
+              "type":"keyword"
+            }
+          }
+        },
+        "miles_travelled":{    # 3)
+          "type":"integer_range"
+        }
+      },
+      "dynamic_templates":[
+        {
+          "rating_fields":{   # 4)
+            "match": "*_rating",
+            "mapping":{
+              "type":"integer"
+            }
+          }
+        },
+        {
+          "undefined_string_fields":{   # 5)
+            "match_mapping_type": "string",
+            "mapping":{
+              "type":"keyword",
+              "index":false
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다음을 **surveys** index에 추가하자. **miles_travelled** field를 적절한 포맷인 **integer_range** 로 변경해야 한다.
+
+```shell
+{
+  "job_title": "Elasticsearch Engineer",
+  "course_rating": 9,
+  "comments": "Great class. I want to get certified now!",
+  "miles_travelled": "0-25"
+}
+```
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT surveys/_doc/1
+{
+  "job_title": "Elasticsearch Engineer",
+  "course_rating":9,
+  "comments": "Great class. I want to get certified now!",
+  "miles_travelled":{
+    "gte":0,
+    "lte": 25
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다음 document를 **surveys** index에 추가하자.
+
+```shell
+PUT surveys/_doc/2
+{
+  "job_title": "Software Engineer",
+  "labs_rating": 10,
+  "city": "Berlin",
+  "miles_travelled": {
+    "gt": 50,
+    "lte": 100
+  }
+}
+```
+
+<details><summary> 정답 </summary>
+
+-	"labs_rating"은 integer로 매핑
+-	"city"는 "index" set -> false와 함께 keyword로 매핑
+-	"miles_travelled"는 integer_range로 매핑
+
+```shell
+GET surveys/_mapping
+```
+
+</details>
+
+<br>
+
+###### 30에서 60마일 사이를 여행한 학생의 모든 survey(document)를 찾는 쿼리를 작성해보자. (1 hit)
+
+<details><summary> 정답 </summary>
+
+```shell
+GET surveys/_search
+{
+  "query":{
+    "bool":{
+      "filter": {
+        "range": {
+          "miles_travelled": {
+            "gte": 30,
+            "lte": 60
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **surveys2** 라는 이름으로 새로운 index를 만들어보자. **surveys2** index는 다음 4가지의 field만 mapping한다. (**copy_to** 와 default값을 null로 정의하는 것에 대한 리뷰)
+
+-	1) field명이 "all_feedback", type이 "text"
+-	2) field명이 "instructor_feedback", "all_feedback" field로 부터 copy된 "text" type
+-	3) field명이 "labs_feedback", "all_feedback" field로 부터 copy된 "text" type
+-	4) field명이 "course_rating", null값이 1이고 coercion이 disabled인 "integer" type
+-	5) 추가적으로, mapping이 upexpected field로써 변하지 않고, unexpected field와 함께하는 document는 indexing이 실패할 것이다.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT surveys2
+{
+  "mappings": {
+    "_doc":{
+      "dynamic": "strict",   # 5)
+      "properties":{
+        "all_feedback":{   # 1)
+          "type": "text"
+        },
+        "instructor_feedback":{   # 2)
+          "type": "text",
+          "copy_to": "all_feedback"
+        },
+        "labs_feedback":{   # 3)
+          "type": "text",
+          "copy_to": "all_feedback"
+        },
+        "course_rating":{   # 4)
+          "type": "integer",
+          "null_value":1,
+          "coerce": false
+        }
+      }  
+    }
+  }
+}
+```
+
+-	corece: false 지정일 경우 숫자가 아니면 오류, true일 경우 문자열은 숫자로 변환, 정수필드에 실수가 들어오면 정수로 변환, [참고](https://www.elastic.co/guide/en/elasticsearch/reference/current/coerce.html)
+
+</details>
+
+<br>
+
+<details><summary> 정답 </summary>
+
+</details>
+
+<br>
+
+<br><br><br><br><br>
+
 3.Fixing Data
 -------------
+
+<br><br><br><br><br>
 
 4.Advanced Search & Aggregations
 --------------------------------
 
+<br><br><br><br><br>
+
 5.Cluster Management
 --------------------
+
+<br><br><br><br><br>
 
 6.Capacity Planning
 -------------------
 
+<br><br><br><br><br>
+
 7.Document Modeling
 -------------------
 
+<br><br><br><br><br>
+
 8.Monitoring and Alerting
 -------------------------
+
+<br><br><br><br><br>
 
 9.From Dev to Production
 ------------------------
