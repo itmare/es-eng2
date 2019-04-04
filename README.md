@@ -596,21 +596,828 @@ PUT surveys2
 
 <br>
 
+###### **surveys2** index의 **all_feedback** field에 "great" term을 찾는 쿼리를 작성해보자. (1 hit)
+
 <details><summary> 정답 </summary>
+
+```shell
+GET surveys2/_search
+{
+  "query":{
+    "match":{
+      "all_feedback": "great"
+    }
+  }
+}
+```
 
 </details>
 
 <br>
+
+###### **course_rating** field에서 값이 1과 같거나 큰 document를 찾는 **range** query를 작성하자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET surveys2/_search
+{
+  "query": {
+    "bool": {
+      "filter": {
+        "range": {
+          "course_rating": {
+            "gte": 1
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다음 3개의 **PUT** command를 실행해보고 각 결과를 예측해보자.
+
+```shell
+# 1.
+PUT surveys2/_doc/2
+{
+  "course_rating": null
+}
+
+# 2.
+PUT surveys2/_doc/3
+{
+  "course_rating": "8"
+}
+
+# 3.
+PUT surveys2/_doc/4
+{
+  "food_rating": 10
+}
+```
+
+<details><summary> 정답 </summary>
+
+1.	**course_rating** field 값 **null** 과 함께 id가 2인 document가 추가된다.
+2.	**course_rating** field 값 **"8"** 은 integer로 coerce될 수 없다. (coerce는 false로 설정되어 있다.)
+3.	**surveys2** index의 "dynamic" setting은 "strict"으로 되어 있으므로, **food_rating** field는 추가 될 수 없다. [참고](https://www.elastic.co/guide/en/elasticsearch/reference/current/dynamic.html)
+
+</details>
+
+<br>
+
+-	doc_values: Sorting, aggregations, and access to field values in scripts requires a different data access pattern.
+
+###### 이름이 **test** 인 새로운 index를 만들기 위해 다음의 **PUT** command 실행하자. (type이 text인 **message** field와 type이 keyword이고 **doc_values** disable인 **level** field)
+
+<details><summary> 정답 </summary>
+
+```shell
+GET test/_search
+{
+  "query": {
+    "bool": {
+      "filter": {
+        "match": {
+          "level": "INFO"
+        }
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **level** field에서 top 5 값을 찾기위해, **term** aggregation을 실행해보자. 다음을 search했을때 어떤 결과가 나오나?
+
+```shell
+GET test/_search
+{
+  "size": 0,
+  "aggs": {
+    "top_levels": {
+      "terms": {
+        "field": "level",
+        "size": 5
+      }
+    }
+  }
+}
+```
+
+<details><summary> 정답 </summary>
+
+-	search 에러: **keyword** field는 **fielddata** 를 사용 할 수 없고, 대신 **doc_values** 를 사용해야 한다. **keyword** field에서 aggregation은 항상 **doc_values** 를 사용해야 하지만, 현재 **doc_values** 는 disable되어있다. 그래서 **level** field에서 aggregate할 수 없다. 만약 **doc_values** 를 enable하길 원한다면, 현재 data를 새로운 index로 reindex해야 한다.
+
+</details>
+
+<br>
+
+###### **message** field에서 top 5 word를 찾기위해, **term** aggregation을 실행해보자. 다음을 search했을 때, 어떤 결과가 나오나?
+
+```shell
+GET test/_search
+{
+  "size": 0,
+  "aggs": {
+    "top_message_words": {
+      "terms": {
+          "field": "message",
+          "size": 5
+      }
+    }
+  }
+}
+```
+
+<details><summary> 정답 </summary>
+
+-	search 에러: **fielddata** 는 **text** field에서 disable되어 있다.
+
+</details>
+
+<br>
+
+###### 때때로 data를 분석하거나, 디버깅 할때, analyzed field에서 aggregation을 실행이 이루어져야 한다. 하지만 **조심해야하는 이유가** 이것은 중요한 heap resource를 소비한다. **message** field를 위해 **fielddata** 를 enable하고, aggreation을 다시 사용해보자. 이번엔 **terms** aggregation이 성공할 것이다.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT test/_mapping/_doc
+{
+  "properties":{
+    "message":{
+      "type": "text",
+      "fielddata": true
+    }
+  }
+}
+
+GET test/_search
+{
+  "size": 0,
+  "aggs": {
+    "top_message_words": {
+      "terms": {
+        "field": "message",
+        "size": 5
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+##### test field를 삭제하자.
+
+```shell
+DELETE test
+```
 
 <br><br><br><br><br>
 
 3.Fixing Data
 -------------
 
+###### **blogs** index 원본을 건드리지말고, 새로운 **blogs_fixed** index를 아래와 같이 mapping하고 reindex할 것이다.
+
+```shell
+PUT blogs_fixed
+{
+  "mappings": {
+    "_doc": {
+      "properties": {
+        "author": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "category": {
+          "type": "keyword"
+        },
+        "content": {
+          "type": "text"
+        },
+        "locales": {
+          "type": "keyword"
+        },
+        "publish_date": {
+          "type": "date"
+        },
+        "seo_title": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "title": {
+          "type": "text"
+        },
+        "url": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "number_of_views": {
+          "type": "integer"
+        },
+        "reindexBatch": {
+          "type": "byte"
+        }
+      }
+    }
+  }
+}
+```
+
+###### **blogs_fixed** mapping은 **reindexBatch** 라는 integer field를 가지고 있다.
+
+###### **blogs** index를 **blogs_fixed** index로 다음에 만족하도록 reindexing하자.
+
+-	**"script"** 안에, 각 document에 **number_of_views** field를 추가하고 0으로 설정
+-	**"script"** 안에, field name이 **reindexBatch** 인 index를 추가하고, 1로 설정
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _reindex
+{
+  "source": {
+    "index": "blogs"
+  },
+  "dest":{
+    "index": "blogs_fixed"
+  },
+  "script":{
+    "source": """
+ctx._source.number_of_views= 0;
+ctx._source.reindexBatch = 1;
+"""
+  }
+}
+
+# 추가된 두개의 field값이 제대로 할당되었는지 확인
+GET blogs_fixed/_search
+```
+
+</details>
+
+<br>
+
+###### blog가 web access logs를 기반으로 얻게되는 number of views를 업데이트하는 script를 작성해보자 (다음 조건에 만족하도록~)
+
+-	script는 id **add_to_number_of_views** 와 함께 cluster state에 저장된다.
+-	script는 **new_views** parameter에 있는 value를 **number_of_views** 에 추가 & 증가시킨다.
+
+<details><summary> 정답 </summary>
+
+```
+POST _scripts/add_to_number_of_views
+{
+  "script":{
+    "lang": "painless",
+    "source":"""
+ctx._source.number_of_views += params.new_views"
+"""
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다음 query를 실행해보자.
+
+```shell
+GET blogs_fixed/_search
+{
+  "query": {
+    "bool": {
+      "filter": {
+        "match": {
+          "url.keyword": "/blog/elasticsearch-storage-the-true-story"
+        }
+      }
+    }
+  }
+}
+```
+
+-	1 hit: title이 "The true story behind Elasticsearch storage requirements"인 blog가 리턴된다.
+
+<br>
+
+###### 다음 query를 실행해보자.
+
+```shell
+GET logs_server*/_search
+{
+  "query": {
+    "bool": {
+      "filter": [
+        {
+          "range": {
+            "@timestamp": {
+              "gte": "2017-05-12",
+              "lt": "2017-05-13"
+            }
+          }
+        },
+        {
+          "match": {
+            "originalUrl.keyword": "/blog/elasticsearch-storage-the-true-story"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+-	상위 blog에 5월 12일의 모든 log entry가 hit된다. (41 hits)
+
+<br>
+
+###### **_update** 와 **add_to_number_of_views** script를 사용해서, 41을 blog의 **number_of_views** field에 더하자. blog의 **_id** 가 필요할 것이다.
+
+<details><summary> 정답 </summary>
+
+```shell
+POST blogs_fixed/_doc/NXXVW2kBn3Lh_w-wuCGq/_update
+{
+  "script": {
+    "id":"add_to_number_of_views",
+    "params": {
+      "new_views": 41
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **number_of_views** field의 값이 제대로 들어갔는지 확인해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET blogs_fixed/_doc/NXXVW2kBn3Lh_w-wuCGq
+```
+
+-	해당 blog의 **_id** 를 사용
+
+</details>
+
+<br>
+
+###### 다음 query를 실행해보자. (같은 블로그에 5월 13일 결과는 11 hit)
+
+```shell
+GET logs_server*/_search
+{
+  "query": {
+    "bool": {
+      "filter": [
+        {
+          "range": {
+            "@timestamp": {
+              "gte": "2017-05-13",
+              "lt": "2017-05-14"
+            }
+          }
+        },
+        {
+          "match": {
+            "originalUrl.keyword": "/blog/elasticsearch-storage-the-true-story"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+<details><summary> 정답 </summary>
+
+```shell
+POST blogs_fixed/_doc/NXXVW2kBn3Lh_w-wuCGq/_update
+{
+  "script":{
+    "id":"add_to_number_of_views",
+    "params":{
+      "new_views": 11
+    }
+  }
+}
+
+# 확인
+GET blogs_fixed/_doc/NXXVW2kBn3Lh_w-wuCGq
+```
+
+</details>
+
+<br>
+
+###### 다음 query를 실행해서, **seo_title** field empty인 것을 찾아보자. 1,220개의 blog post의 **seo_title** field가 비워져 있을 것이다. (전체 blog의 75% 이상)
+
+```shell
+GET blogs_fixed/_search
+{
+  "query": {
+    "bool": {
+      "filter": {
+        "match": {
+          "seo_title.keyword": ""
+        }
+      }
+    }
+  }
+}
+```
+
+###### 다음을 만족하는 ingest pipeline을 정의하자.
+
+-	pipeline name은 **fix_seo_title**
+-	**"script"** processor 추가, 만약 **seo_title** 이 emtpy string ""와 같으면, **seo_title** 을 **title** field의 값으로 설정
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT _ingest/pipeline/fix_seo_title
+{
+  "processors": [
+    {
+      "script":{
+        "source": """
+if ("".equals(ctx._source.seo_title))
+{
+  ctx.seo_title = ctx.title;
+}
+ctx.reindexBatch = 2;
+"""
+      }
+    }
+  ]
+}
+```
+
+</details>
+
+<br>
+
+###### 생성한 pipeline은 전체 index에 적용하기 전에 샘플 document로 항상 테스트 해야한다. **fix_seo_title** pipeline을 다음 두개의 document를 가지고 테스트 해보자.
+
+```shell
+{
+   "title": "Where in the World is Elastic? - Elastic{ON}Tour London & Paris",
+   "seo_title": ""
+}
+
+{
+   "title": "This week in Elasticsearch and Apache Lucene",
+   "seo_title": "What's new in Elasticsearch and Apache Lucene"
+}
+```
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _ingest/pipeline/fix_seo_title/_simulate
+{
+  "docs": [
+    {
+      "_source":{
+        "title": "Where in the World is Elastic? - Elastic{ON}Tour London & Paris",
+        "seo_title": ""
+      }
+    },
+    {
+      "_source":{
+        "title": "This week in Elasticsearch and Apache Lucene",
+        "seo_title": "What's new in Elasticsearch and Apache Lucene"
+      }
+    }
+  ]
+}
+```
+
+</details>
+
+<br>
+
+###### 각각의 document를 **fix_seo_title** pipeline을 통해 보내기 위해, **blogs_fixed** index에서 **_update_by_query** 를 실행해 보자. Update by query는 **reindexBatch** value가 1인 document만 업데이트 해야 한다. (1594 document)
+
+<details><summary> 정답 </summary>
+
+```shell
+POST blogs_fixed/_update_by_query?pipeline=fix_seo_title
+{
+  "query":{
+    "match":{
+      "reindexBatch": 1
+    }
+  }
+}
+```
+
+-	첫 **_update_by_query** 는 시간이 조금 걸린다.
+
+</details>
+
+-	\_update_by_query API: source의 변경없이 index에 있는 모든 document의 업데이트를 수행한다. [Update By Query API](https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-update-by-query.html)
+
+<br>
+
+###### 위의 update by query를 한번 더 실행해보자. 모든 document들은 첫 **_update_by_query** 에 의해 업데이트 되었기 때문에, 이번엔 아주 짧은 시간이 걸리고 0 document의 update를 볼 수 있다.
+
+<br>
+
+###### 다음 쿼리를 실행하고, 현재 **seo_title** field의 값이 empty인 것이 없음을 확인하자.
+
+```shell
+GET blogs_fixed/_search
+{
+  "query": {
+    "bool": {
+      "filter": {
+        "match": {
+          "seo_title.keyword": ""
+        }
+      }
+    }
+  }
+}
+```
+
+<br>
+
+###### **blogs_fixed** index의 **locales** field를 cleanup하자. 다음 term aggregation을 실행하고, 결과를 분석 하자.
+
+```shell
+GET blogs_fixed/_search
+{
+  "size": 0,
+  "aggs": {
+    "locale_terms": {
+      "terms": {
+        "field": "locales",
+        "size": 10
+      }
+    }
+  }
+}
+```
+
+<br>
+
+###### 총 1495 document의 **locales** field값이 비워져있는 것을 확인했다. 현재 locales field는 정리가 잘 안되어 있다. **locales** field를 다음 조건을 바탕으로 **pipeline** 을 만들어서 수정해보자.
+
+-	pipeline의 이름은 **fix_locales** 로 정의
+-	첫번째 processor는 **locales** field가 empty string임을 확인하는 **script** processor이다. 이런 경우에, **"en-en"** 값을 할당해라. empty가 아니라면 그냥 놔두자.
+-	위에서 설정한 script processor는 모든 document의 **reindexBatch** 값을 3으로 설정 해야 한다.
+-	두번째 processor는 separator로써 comma(,)를 사용하여 **locales** field값을 array로 나누는 **split** processor이다.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT _ingest/pipeline/fix_locales
+{
+  "processors": [
+    {
+      "script": {
+        "source": """
+if("".equals(ctx.locales))
+{
+  ctx.locales = "en-en";
+}
+ctx.reindexBatch = 3;
+"""
+      }
+    },
+    {
+      "split": {
+        "field": "locales",
+        "separator": ","
+      }
+    }
+  ]
+}
+```
+
+</details>
+
+<br>
+
+###### 다음 2 document를 가지고 **fix_locales** processor를 테스트 해보자.
+
+```shell
+{
+  "locales": "de-de,fr-fr,ja-jp,ko-kr"
+}
+
+{
+  "locales": ""
+}
+```
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _ingest/pipeline/fix_locales/_simulate
+{
+  "docs": [
+    {
+      "_source":{
+        "locales": "de-de,fr-fr,ja-jp,ko-kr"
+      }
+    },
+    {
+      "_source":{
+        "locales": ""
+      }
+    }
+  ]
+}
+
+# result
+{
+  "docs" : [
+    {
+      "doc" : {
+        "_index" : "_index",
+        "_type" : "_type",
+        "_id" : "_id",
+        "_source" : {
+          "locales" : [
+            "de-de",
+            "fr-fr",
+            "ja-jp",
+            "ko-kr"
+          ],
+          "reindexBatch" : 3
+        },
+        "_ingest" : {
+          "timestamp" : "2019-04-03T07:21:43.162Z"
+        }
+      }
+    },
+    {
+      "doc" : {
+        "_index" : "_index",
+        "_type" : "_type",
+        "_id" : "_id",
+        "_source" : {
+          "locales" : [
+            "en-en"
+          ],
+          "reindexBatch" : 3
+        },
+        "_ingest" : {
+          "timestamp" : "2019-04-03T07:21:43.162Z"
+        }
+      }
+    }
+  ]
+}
+```
+
+</details>
+
+<br>
+
+###### **_update_by_query** 를 사용해서, **blogs_fixed** index에 있는 **reindexBatch** field값이 2인 모든 document들을 업데이트 해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+POST blogs_fixed/_update_by_query?pipeline=fix_locales
+{
+  "query":{
+    "match":{
+      "reindexBatch": 2
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다시 한번 **locales** field에서 **terms** aggregation을 실행해보고 분석해보자.
+
+```shell
+# query
+GET blogs_fixed/_search
+{
+  "size": 0,
+  "aggs": {
+    "new_locales": {
+      "terms": {
+        "field": "locales",
+        "size": 10
+      }
+    }
+  }
+}
+
+# response
+{
+  "took" : 29,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 5,
+    "successful" : 5,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : 1595,
+    "max_score" : 0.0,
+    "hits" : [ ]
+  },
+  "aggregations" : {
+    "new_locales" : {
+      "doc_count_error_upper_bound" : 0,
+      "sum_other_doc_count" : 0,
+      "buckets" : [
+        {
+          "key" : "en-en",
+          "doc_count" : 1495
+        },
+        {
+          "key" : "ja-jp",
+          "doc_count" : 67
+        },
+        {
+          "key" : "fr-fr",
+          "doc_count" : 61
+        },
+        {
+          "key" : "de-de",
+          "doc_count" : 59
+        },
+        {
+          "key" : "ko-kr",
+          "doc_count" : 54
+        },
+        {
+          "key" : "zh-chs",
+          "doc_count" : 10
+        }
+      ]
+    }
+  }
+}
+```
+
+<br>
+
+###### 다음과 같이 **locales** field를 확인해보면, 값이 모두 array에 있는 것을 확인할 수 있다.
+
+```shell
+GET blogs_fixed/_search
+{
+  "size": 100,
+  "_source": "locales"
+}
+```
+
 <br><br><br><br><br>
 
 4.Advanced Search & Aggregations
 --------------------------------
+
+###### **log_server*** document는 **runtime_ms** field를 가지고 있다. **script_fields** 를 사용해서, **runtime_ms** 의 값을 second로 리턴하는 query를 작성해보자.
+
+<details><summary> 정답 </summary>
+
+</details>
+
+<br>
 
 <br><br><br><br><br>
 
