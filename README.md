@@ -1415,6 +1415,615 @@ GET blogs_fixed/_search
 
 <details><summary> 정답 </summary>
 
+```shell
+GET logs_server*/_search
+{
+  "script_fields": {
+    "response_sec": {
+      "script": {
+        "lang": "painless",
+        "source": """
+doc['runtime_ms'].value /1000.0
+"""
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다음을 만족하는 query를 작성해 보자.
+
+-	1) **script_fields** 를 사용해서, **geoip.city_name** 값과 **geoip.region_name** 값이 comma(,)로 분리된 single field를 리턴
+-	2) **geoip.city_name** field와 **geoip.region_name** field 둘다 존재하고, null값이 아닌 document를 리턴
+-	3) 각 hit의 모든 **_source** 를 리턴
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "_source": [],  ### 3)
+  "script_fields": {   ### 1)
+    "city_region": {
+      "script": {
+        "lang": "painless",
+        "source": """
+doc['geoip.city_name.keyword'].value + "," + doc['geoip.region_name.keyword'].value
+"""
+      }
+    }
+  },
+  "query":{   ### 2)
+    "bool": {
+      "filter": [
+        {
+          "exists":{
+            "field": "geoip.city_name"
+          }
+        },
+        {
+          "exists":{
+            "field": "geoip.region_name"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다음 query를
+
+```shell
+GET logs_server*/_search
+{
+  "query": {
+    "bool": {
+      "filter": [
+        {
+          "range": {
+            "@timestamp": {
+              "gte": "2017-05-12",
+              "lt": "2017-05-13"
+            }
+          }
+        },
+        {
+          "match": {
+            "originalUrl.keyword": "/blog/elasticsearch-storage-the-true-story"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _scripts/daily_hits
+{
+  "script":{
+    "lang": "mustache",
+    "source": {
+      "query":{
+        "bool":{
+          "must":{
+            "match":{
+              "originalUrl.keyword": "{{url}}"
+            }
+          },
+          "filter":{
+            "range": {
+              "@timestamp": {
+                "gte": "{{start_date}}",
+                "lt": "{{end_date}}"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **daily_hits** search template을 다음 value를 가지고 테스트해보자.
+
+-	url: "/blog/brewing-in-beats-postgresql-module-in-filebeat"
+-	start_date: "2017-08-11"
+-	end_date: "2017-08-12"
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search/template
+{
+  "id": "daily_hits",
+  "params": {
+    "url": "/blog/brewing-in-beats-postgresql-module-in-filebeat",
+    "start_date": "2017-08-11",
+    "end_date": "2017-08-12"
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **daily_hits** search template에서 **end_date** parameter를 제거해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _scripts/daily_hits
+{
+  "script": {
+    "lang": "mustache",
+    "source": """
+    {
+      "query": {
+        "bool": {
+          "must": {
+            "match": {
+              "originalUrl.keyword": "{{url}}"
+            }
+          },
+          "filter": {
+            "range": {
+              "@timestamp": {
+                "gte": "{{start_date}}"
+                {{#end_date}}
+                ,
+
+                "lt": "{{end_date}}"
+                {{/end_date}}
+              }
+            }
+          }
+        }
+      }
+    }
+"""
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **date_historgram** aggregation을 사용해서 월별 visitor의 수를 분석해보자. aggregation 이름은 **number_of_visitors_by_month"** 로 정하고, 월별 웹사이트의 visitor수를 계산하자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "aggs": {
+    "number_of_visitors_by_month": {
+      "date_histogram": {
+        "field": "@timestamp",
+        "interval": "month"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **max_monthly_visitors** 라는 이름으로, 가장 많이 방문한 달을 계산하는 pipeline aggregation을 추가하자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "aggs": {
+    "number_of_visitors_by_month": {
+      "date_histogram": {
+        "field": "@timestamp",
+        "interval": "month"
+      }
+    },
+    "max_monthly_visitors":{
+      "max_bucket": {
+        "buckets_path": "number_of_visitors_by_month._count"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 각 월마다 top 5 visited URL을 찾는 **top_visited_urls** nested aggregation을 **number_of_visitors_by_month** 에 추가하자. (**originalUrl.keyword** field를 사용)
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "aggs": {
+    "number_of_visitors_by_month": {
+      "date_histogram": {
+        "field": "@timestamp",
+        "interval": "month"
+      },
+      "aggs": {
+        "top_visited_urls": {
+          "terms": {
+            "field": "originalUrl.keyword",
+            "size": 5
+          }
+        }
+      }
+
+    },
+    "max_monthly_visitors":{
+      "max_bucket": {
+        "buckets_path": "number_of_visitors_by_month._count"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **number_of_visitors_by_month** 에 **most_visited_url_of_month** pipeline aggregation을 추가하자. **most_visited_urL_month** pipeline aggregation은 달마다 가장 많은 방문객 수를 계산한다. 위에 **term** agg에서 이미 해당 값을 return 했지만, pipeline agg에서 max value만을 찾아보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "aggs": {
+    "number_of_visitors_by_month": {
+      "date_histogram": {
+        "field": "@timestamp",
+        "interval": "month"
+      },
+      "aggs": {
+        "top_visited_urls": {
+          "terms": {
+            "field": "originalUrl.keyword",
+            "size": 5
+          }
+        },
+        "most_visited_url_of_month": {
+          "max_bucket": {
+            "buckets_path": "top_visited_urls._count"
+          }
+        }
+      }
+    },
+    "max_monthly_visitors": {
+      "max_bucket": {
+        "buckets_path": "number_of_visitors_by_month._count"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **most_visited_url_of_month** **most_visited_url_of_month** 의 가장 큰 값을 찾는 **month_with_most_visited_url_by_month** pipe aggregation을 추가해 보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "aggs": {
+    "number_of_visitors_by_month": {
+      "date_histogram": {
+        "field": "@timestamp",
+        "interval": "month"
+      },
+      "aggs": {
+        "top_visited_urls": {
+          "terms": {
+            "field": "originalUrl.keyword",
+            "size": 5
+          }
+        },
+        "most_visited_url_of_month": {
+          "max_bucket": {
+            "buckets_path": "top_visited_urls._count"
+          }
+        }
+      }
+    },
+    "max_monthly_visitors": {
+      "max_bucket": {
+        "buckets_path": "number_of_visitors_by_month._count"
+      }
+    },
+    "month_with_most_visited_url_by_month": {
+      "max_bucket": {
+        "buckets_path": "number_of_visitors_by_month>most_visited_url_of_month"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **originalUrl.keyword** field를 missing한 log event의 수를 리턴하는 aggregation을 작성해 보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "aggs": {
+    "missing_log_events": {
+      "missing": {
+        "field": "originalUrl.keyword"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### top 20 도시 각각에서 top 3 URL은 무엇인지 확인해보자. 두개의 각기 다른 query의 결과값을 비교 분석해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "aggs": {
+    "top_20_cities": {
+      "terms": {
+        "field": "geoip.city_name.keyword",
+        "size": 20
+      },
+      "aggs":{
+        "top_urls": {
+          "terms":{
+            "field": "originalUrl.keyword",
+            "size": 3
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### top 3 URL의 **terms** aggregation을 **significant_terms** aggregation으로 바꾸고, 두개의 query를 비교해 보. (Notice how the URLs have changed to be less generic and more specific topics.)
+
+<details><summary> 정답 </summary>
+
+```shell
+
+GET logs_server*/_search
+{
+  "size": 0,
+  "aggs": {
+    "top_cities": {
+      "terms": {
+        "field": "geoip.city_name.keyword",
+        "size": 20
+      },
+      "aggs": {
+        "top_urls": {
+          "significant_terms": {
+            "field": "originalUrl.keyword",
+            "size": 3
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다음 query는 2017년 8월 첫주의 모든 log를 리턴한다. 다음을 만족하는 **status_plus_url_terms** 라는 이름의 **terms** aggregation을 추가하자.
+
+-	term으로써, **geoip.region_name** 과 **originalUrl** 의 combination을 사용해라. script에서 두개의 field는 semi-colon(:)으로 구분된다.
+-	100의 term을 리턴해라.
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": {
+        "range": {
+          "@timestamp": {
+            "gte": "2017-08-01",
+            "lte": "2017-08-07"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": {
+        "range": {
+          "@timestamp": {
+            "gte": "2017-08-01",
+            "lte": "2017-08-07"
+          }
+        }
+      }
+    }
+  },
+  "aggs": {
+    "status_plus_url_terms": {
+      "terms": {
+        "script": {
+          "source": """
+doc['geoip.region_name.keyword'].value + ':' + doc['originalUrl.keyword'].value
+"""
+        },
+        "size": 100
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 위의 결과에 **region_name** 이 **null** 값인 log event가 많다. 우의 query를 변경해서 **region_name** 이 null이 아닌 document의 **terms** agg만을 결과값으로 리턴하도록 수정해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": [
+        {
+          "range": {
+            "@timestamp": {
+              "gte": "2017-08-01",
+              "lte": "2017-08-07"
+            }
+          }
+        },
+        {
+          "exists":{
+            "field": "geoip.region_name"
+          }
+        }
+      ]
+    }
+  },
+  "aggs": {
+    "status_plus_url_terms": {
+      "terms": {
+        "script": {
+          "source": """
+doc['geoip.region_name.keyword'].value + ':' + doc['originalUrl.keyword'].value
+"""
+        },
+        "size": 100
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 각각의 term에서 top3 log event를 리턴하는 **top_hits** aggregation을 **status_plus_url_terms** 에 추가시켜보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET logs_server*/_search
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": [
+        {
+          "range": {
+            "@timestamp": {
+              "gte": "2017-08-01",
+              "lte": "2017-08-07"
+            }
+          }
+        },
+        {
+          "exists":{
+            "field": "geoip.region_name"
+          }
+        }
+      ]
+    }
+  },
+  "aggs": {
+    "status_plus_url_terms": {
+      "terms": {
+        "script": {
+          "source": "doc['geoip.region_name.keyword'].value + ':' + doc['originalUrl.keyword'].value"
+        },
+        "size": 100,
+        "order": {
+          "_key": "asc"
+        }
+      },
+      "aggs": {
+        "top_hits_of_status_plus_url_terms": {
+          "top_hits": {
+            "size": 3
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 </details>
 
 <br>
@@ -1424,15 +2033,540 @@ GET blogs_fixed/_search
 5.Cluster Management
 --------------------
 
+###### 5대의 서버에 다음과 같이 설정해 보자.
+
+-	**"my_temp"**, **"my_rack"** tag names 설정
+-	**"my_cluster"** cluster name으로 설정
+-	**minimum_master_nodes** 값을 1로 설정
+-	각 노드의 **network.host** 값을 **"\_site\_"** 로 설정
+
+| Node  | Server  | Type                      | box_type | rack_type |
+|:-----:|:-------:|:-------------------------:|:--------:|:---------:|
+| node1 | server1 | dedicated master-eligible |   none   |   none    |
+| node2 | server2 |      data and ingest      |   hot    |   rack1   |
+| node3 | server3 |      dedicated data       |   warm   |   rack1   |
+| node4 | server4 |      data and ingest      |   hot    |   rack2   |
+| node5 | server5 |      dedicated data       |   warm   |   rack2   |
+
+<details><summary> 정답 </summary>
+
+```shell
+#node1 config
+cluster.name: my_cluster
+node.name: ${NODENAME}
+network.host: _site_
+discovery.zen.minimum_master_nodes: 1
+discovery.zen.ping.unicast.hosts: ["server1","server2","server3"]
+xpack.security.enabled: true
+node.master: true
+node.data: false
+node.ingest: false
+
+#node2 config
+cluster.name: my_cluster
+node.name: ${NODENAME}
+network.host: _site_
+discovery.zen.ping.unicast.hosts: ["server1","server2","server3"]
+xpack.security.enabled: true
+node.master: false
+node.data: true
+node.ingest: true
+node.attr.my_temp: hot
+node.attr.my_rack: rack1
+
+#node3 config
+cluster.name: my_cluster
+node.name: ${NODENAME}
+network.host: _site_
+discovery.zen.ping.unicast.hosts: ["server1","server2","server3"]
+xpack.security.enabled: true
+node.master: false
+node.data: true
+node.ingest: false
+node.attr.my_temp: warm
+node.attr.my_rack: rack1
+
+#node4 config
+cluster.name: my_cluster
+node.name: ${NODENAME}
+network.host: _site_
+discovery.zen.ping.unicast.hosts: ["server1","server2","server3"]
+xpack.security.enabled: true
+node.master: false
+node.data: true
+node.ingest: true
+node.attr.my_temp: hot
+node.attr.my_rack: rack2
+
+#node5 config
+cluster.name: my_cluster
+node.name: ${NODENAME}
+network.host: _site_
+discovery.zen.ping.unicast.hosts: ["server1","server2","server3"]
+xpack.security.enabled: true
+node.master: false
+node.data: true
+node.ingest: false
+node.attr.my_temp: warm
+node.attr.my_rack: rack2
+```
+
+</details>
+
+<br>
+
+<details><summary> my config settings </summary>
+
+```shell
+# node1
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+path.repo: /shared_folder/my_repo
+
+network.host: _site_
+http.cors.enabled: true
+http.cors.allow-origin: "*"
+discovery.zen.ping.unicast.hosts: ["es01:9300", "es02:9300", "es03:9300"]
+discovery.zen.minimum_master_nodes: 1
+network.bind_host: 0.0.0.0
+network.publish_host: es01
+http.port: 9200
+transport.tcp.port: 9300
+
+cluster.name: my_cluster
+node.name: node1
+node.master: true
+node.data: false
+node.ingest: false
+
+xpack.security.enabled: false
+
+# node2
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+path.repo: /shared_folder/my_repo
+
+network.host: _site_
+http.cors.enabled: true
+http.cors.allow-origin: "*"
+discovery.zen.ping.unicast.hosts: ["es01:9300", "es02:9300", "es03:9300"]
+discovery.zen.minimum_master_nodes: 1
+network.bind_host: 0.0.0.0
+network.publish_host: es02
+http.port: 9200
+transport.tcp.port: 9300
+
+cluster.name: my_cluster
+node.name: node2
+node.master: false
+node.data: true
+node.ingest: true
+
+node.attr.box_type: hot
+node.attr.rack_type: rack1
+
+xpack.security.enabled: false
+
+# node3
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+path.repo: /shared_folder/my_repo
+
+network.host: _site_
+http.cors.enabled: true
+http.cors.allow-origin: "*"
+discovery.zen.ping.unicast.hosts: ["es01:9300", "es02:9300", "es03:9300"]
+discovery.zen.minimum_master_nodes: 1
+network.bind_host: 0.0.0.0
+network.publish_host: es03
+http.port: 9200
+transport.tcp.port: 9300
+
+cluster.name: my_cluster
+node.name: node3
+node.master: false
+node.data: true
+node.ingest: false
+
+node.attr.box_type: warm
+node.attr.rack_type: rack1
+
+xpack.security.enabled: false
+
+# node4
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+path.repo: /shared_folder/my_repo
+
+network.host: _site_
+http.cors.enabled: true
+http.cors.allow-origin: "*"
+discovery.zen.ping.unicast.hosts: ["es01:9300", "es02:9300", "es03:9300"]
+discovery.zen.minimum_master_nodes: 1
+network.bind_host: 0.0.0.0
+network.publish_host: es04
+http.port: 9200
+transport.tcp.port: 9300
+
+
+cluster.name: my_cluster
+node.name: node4
+node.master: false
+node.data: true
+node.ingest: true
+
+node.attr.box_type: hot
+node.attr.rack_type: rack2
+
+xpack.security.enabled: false
+
+# node5
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+path.repo: /shared_folder/my_repo
+
+network.host: _site_
+http.cors.enabled: true
+http.cors.allow-origin: "*"
+discovery.zen.ping.unicast.hosts: ["es01:9300", "es02:9300", "es03:9300"]
+discovery.zen.minimum_master_nodes: 1
+network.bind_host: 0.0.0.0
+network.publish_host: es05
+http.port: 9200
+transport.tcp.port: 9300
+
+
+cluster.name: my_cluster
+node.name: node5
+node.master: false
+node.data: true
+node.ingest: false
+
+node.attr.box_type: warm
+node.attr.rack_type: rack2
+
+xpack.security.enabled: false
+```
+
+</details>
+
+###### **cat** api를 사용해서 node와 attr설정을 확인해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET _cat/nodes?v
+GET _cat/nodeattrs?v
+```
+
+</details>
+
+<br>
+
+###### **logs_server1** 과 **logs_server2** index를 warm node로만 할당하고, **logs_server3** index는 hot node로만 할당하도록 설정해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT logs_server1/_settings
+{
+  "index.routing.allocation.require.box_type": "warm"
+}
+
+PUT logs_server2/_settings
+{
+  "index.routing.allocation.require.box_type": "warm"
+}
+
+PUT logs_server3/_settings
+{
+  "index.routing.allocation.require.box_type": "hot"
+}
+```
+
+</details>
+
+<br>
+
+###### **cat** command를 통해, shard filtering이 제대로 작동 했는데 확인해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET _cat/shards/logs_server*?v&h=index,shard,node&s=index,shard,node
+```
+
+</details>
+
+<br>
+
+###### 강제로 shard allocation awareness를 실행하기 위한 **rack_type** attribute를 사용하는 cluster를 **transient** setting을 사용하여 설정해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT _cluster/settings
+{
+  "transient": {
+    "cluster":{
+      "routing":{
+        "allocation.awareness.attributes": "rack_type",
+        "allocation.awareness.force.rack_type.values": "rack1,rack2"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 다음과 같이 \_cat API를 실행해보고, 결과를 확인해 보자.
+
+```shell
+GET _cat/shards/logs_server*?v&h=index,shard,prirep,state,node&s=index,shard
+```
+
+-	각각의 primary와 replica shard는 다른 rack에 위치하게 된다. 다음과 비슷한 결과 확인 가능
+
+```shell
+index        shard prirep state   node
+logs_server1 0     r      STARTED node5
+logs_server1 0     p      STARTED node3
+logs_server1 1     p      STARTED node5
+logs_server1 1     r      STARTED node3
+logs_server1 2     r      STARTED node5
+logs_server1 2     p      STARTED node3
+logs_server1 3     r      STARTED node5
+logs_server1 3     p      STARTED node3
+logs_server1 4     r      STARTED node5
+logs_server1 4     p      STARTED node3
+logs_server2 0     p      STARTED node5
+logs_server2 0     r      STARTED node3
+logs_server2 1     p      STARTED node5
+logs_server2 1     r      STARTED node3
+logs_server2 2     r      STARTED node5
+logs_server2 2     p      STARTED node3
+logs_server2 3     r      STARTED node5
+logs_server2 3     p      STARTED node3
+logs_server2 4     r      STARTED node5
+logs_server2 4     p      STARTED node3
+logs_server3 0     p      STARTED node2
+logs_server3 0     r      STARTED node4
+logs_server3 1     p      STARTED node2
+logs_server3 1     r      STARTED node4
+logs_server3 2     r      STARTED node2
+logs_server3 2     p      STARTED node4
+logs_server3 3     p      STARTED node2
+logs_server3 3     r      STARTED node4
+logs_server3 4     r      STARTED node2
+logs_server3 4     p      STARTED node4
+```
+
 <br><br><br><br><br>
 
 6.Capacity Planning
 -------------------
 
+###### 1 primary와 1 replica shard를 포함하는 **logs-2018-07-04** index를 생성하자.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT logs-2018-07-04
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **logs-2018-07-04** index를 **logs-write** alias로 정의하자.
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _aliases
+{
+  "actions": [
+    {
+      "add": {
+        "index": "logs-2018-07-04",
+        "alias": "logs-write"
+      }
+    }
+  ]
+}
+```
+
+</details>
+
+<br>
+
+###### **logs-2018-07-04** index를 **logs-read** 이름으로 alias를 정의해 보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _aliases
+{
+  "actions": [
+    {
+      "add": {
+        "index": "logs-2018-07-04",
+        "alias": "logs-read"
+      }
+    }
+  ]
+}
+```
+
+</details>
+
+<br>
+
+###### **bulk** command를 사용해서, 다음 log document를 **log-write** index에 indexing해 보자.
+
+```
+PUT logs-write/_doc/_bulk
+{ "index" : { "_id" : "1"}}
+{ "level" : "INFO", "message" : "recovered [20] indices into cluster_state", "date" : "2018-07-04"}
+{ "index" : { "_id" : "2"}}
+{ "level" : "WARN", "message" : "received shard failed for shard id 0", "date" : "2018-07-04"}
+{ "index" : { "_id" : "3"}}
+{ "level" : "INFO", "message" : "Cluster health status changed from [YELLOW] to [GREEN]", "date" : "2018-07-04"}
+```
+
+<br>
+
+###### 다음 query를 실행해서 추가한 3개의 document를 확인해보자.
+
+```shell
+GET logs-read/_search
+```
+
+<br>
+
+###### 날짜가 7월4일에서 7월5일로 변경되었다고 가정하고, primary shard가 1, replica shard가 1인 새로운 **logs-2018-07-05** index를 생성 해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT logs-2018-07-05
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **logs-write** alias를 **logs-2018-07-04** index에서 제거하고, **logs-2018-07-04** index에 할당해 보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _aliases
+{
+  "actions": [
+    {
+      "add": {
+        "index": "logs-2018-07-05",
+        "alias": "logs-write"
+      }
+    },
+    {
+      "remove": {
+        "index": "logs-2018-07-04",
+        "alias": "logs-write"
+      }
+    }
+  ]
+}
+```
+
+</details>
+
+<br>
+
+###### 다음의 log event document를 **log-write** alias를 통해 indexing해보자.
+
+```
+PUT logs-write/_doc/_bulk
+{ "index" : { "_id" : "4"}}
+{ "level" : "INFO", "message" : "[node2] started", "date" : "2018-07-05"}
+{ "index" : { "_id" : "5"}}
+{ "level" : "WARN", "message" : "not enough master nodes discovered during pinging", "date" : "2018-07-05"}
+```
+
+###### 다음 query를 실행해서 위 2개의 document가 제대로 indexing 되었는지 확인해보자. (2 hits)
+
+```shell
+GET logs-2018-07-05/_search
+```
+
+<br>
+
+###### **logs-2018-07-05** index를 **logs-read** alias에 추가하자.
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _aliases
+{
+  "actions": [
+    {
+      "add": {
+        "index": "logs-2018-07-05",
+        "alias": "logs-read"
+      }
+    }
+  ]
+}
+```
+
+</details>
+
+<br>
+
+###### 다음 query를 실행 해보고, 결과를 분석해보자. (5 hits)
+
+```shell
+GET logs-read/_search
+```
+
+<br>
+
+###### 다음 query를 실행 했을때, 어떤 상황이 벌어질까?
+
+```shell
+DELETE logs-read
+```
+
+<details><summary> 정답 </summary> - 에러 발생, alias를 삭제할 수 없다. 6.0이하 버전에서는 alias에 해당하는 모든 index를 삭제 했지만, index삭제를 위해선 정확한 index 명을 입력해야한다. 위의 command는 잘못된 command이다.</details>
+
 <br><br><br><br><br>
 
 7.Document Modeling
 -------------------
+
+######
+
+<details><summary> 정답 </summary>
+
+</details>
+
+<br>
 
 <br><br><br><br><br>
 
