@@ -1406,6 +1406,14 @@ GET blogs_fixed/_search
 }
 ```
 
+<br>
+
+-	저장된 script list 확인하기
+
+```shell
+GET _cluster/state/metadata?pretty&filter_path=**.stored_scripts
+```
+
 <br><br><br><br><br>
 
 4.Advanced Search & Aggregations
@@ -2560,9 +2568,305 @@ DELETE logs-read
 7.Document Modeling
 -------------------
 
-######
+###### 다음 **PUT** command를 실행해서, nested array object를 포함하는 document를 indexing하자.
+
+```
+PUT vehicles_temp/_doc/1
+{
+  "cars" : [
+    { "model" : "Corvette", "color" : "red", "horsepower" : 455},
+    { "model" : "Volt", "color" : "yellow", "horsepower" : 149}
+  ]
+}
+```
+
+###### **vehicles_temp** index에서 "car"의 모든 inner object를 보여주는 **mapping** 값들을 **GET** 해보자.
 
 <details><summary> 정답 </summary>
+
+```shell
+GET vehicles_temp/_mapping
+```
+
+</details>
+
+<br>
+
+###### **vehicles_temp** index에서 **bool** query를 사용, 반드시 yello Corvette인 자동차를 찾아 보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET vehicles_temp/_search
+{
+  "query":{
+    "bool": {
+      "must": [
+        {
+          "match": {
+            "cars.color": "yellow"
+          }
+        },
+        {
+          "match": {
+            "cars.model": "Corvette"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### 위의 답이 정확한 답일까? 생각해보자.
+
+<details><summary> 정답 </summary> - document에서 반드시 yellow의 Corvette인 차는 존재하지 않으므로 0 hit을 기대했지만, 위의 결과는 1 hit이다. 원하는 결과값이 아니다</details>
+
+<br>
+
+###### **vehicles_temp** index의 mapping 정보를 활용해서, **vehicles** index를 새롭게 mapping하자. 단 cars의 inner object는 nested type으로 설정하자.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT vehicles
+{
+  "mappings" : {
+    "_doc" : {
+      "properties" : {
+        "cars" : {
+          "type": "nested",   #  cars를 nested type으로~
+          "properties" : {
+            "color" : {
+              "type" : "text",
+              "fields" : {
+                "keyword" : {
+                  "type" : "keyword",
+                  "ignore_above" : 256
+                }
+              }
+            },
+            "horsepower" : {
+              "type" : "long"
+            },
+            "model" : {
+              "type" : "text",
+              "fields" : {
+                "keyword" : {
+                  "type" : "keyword",
+                  "ignore_above" : 256
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### **vehicles_temp** index를 **vehicles** index로 reindexing하자.
+
+<details><summary> 정답 </summary>
+
+```shell
+POST _reindex
+{
+  "source": {
+    "index": "vehicles_temp"
+  },
+  "dest": {
+    "index": "vehicles"
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### yellow Corvette를 찾는 **nested** query를 실행시켜보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+GET vehicles/_search
+{
+  "query": {
+    "nested": {
+      "path": "cars",
+      "query": {
+        "bool": {
+          "filter": [
+            {
+              "match": {
+                "cars.color": "yellow"
+              }
+            },
+            {
+              "match": {
+                "cars.model": "corvette"
+              }
+            }
+          ]
+        }
+      },
+      "inner_hits": {}
+    }
+  }
+}
+
+```
+
+</details>
+
+<br>
+
+###### 위의 query를 이용해서 red Corvette을 검색해보자. (1 hit)
+
+<details><summary> 정답 </summary>
+
+```shell
+GET vehicles/_search
+{
+  "query": {
+    "nested": {
+      "path": "cars",
+      "query": {
+        "bool": {
+          "filter": [
+            {
+              "match": {
+                "cars.color": "red"
+              }
+            },
+            {
+              "match": {
+                "cars.model": "corvette"
+              }
+            }
+          ]
+        }
+      },
+      "inner_hits": {}
+    }
+  }
+}
+```
+
+</details>
+
+<br>
+
+###### car의 parent로써 "owner"를 나타내는 relation field를 추가해서 **vehicles** index에 parent/child relationship을 적용해보자. relationship field가 정의되면, name이 "John Doe"인 owner_name으로 indexing하고, Toyota Prius의 owner로 만들자. 그리고 적용이 잘 되었는지 테스트하기 위해, **has_child** 와 **has_parent** query를 실행해보자.
+
+<details><summary> 정답 </summary>
+
+```shell
+PUT vehicles/_doc/_mapping
+{
+  "properties":{
+    "owner_car_relation":{
+      "type": "Join",
+      "relations":{
+        "owner": "car"
+      }
+    }
+  }
+}
+
+
+PUT vehicles/_doc/_mapping
+{
+  "properties": {
+    "owner_car_relation": {
+      "type": "join",
+      "relations": {
+        "owner": "car"
+      }
+    }
+  }
+}
+
+
+PUT vehicles/_doc/10
+{
+  "owner_name": "John Doe",
+  "owner_car_relation": {
+    "name": "owner"
+  }
+}
+
+
+PUT vehicles/_doc/2?routing=10
+{
+  "cars": [
+    {
+      "model": "Prius",
+      "color": "grey",
+      "horsepower": 121
+
+    }
+  ],
+  "owner_car_relation":{
+    "name": "car",
+    "parent": 10
+  }
+}
+
+
+
+
+GET vehicles/_search
+{
+  "query": {
+    "has_child": {
+      "type": "car",
+      "query": {
+        "nested": {
+          "path": "cars",
+          "query": {
+            "bool": {
+              "filter": {
+                "match": {
+                  "cars.model": "Prius"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+GET vehicles/_search
+{
+  "query": {
+    "has_parent": {
+      "parent_type": "owner",
+      "query": {
+        "bool": {
+          "filter": {
+            "match": {
+              "owner_name": "John"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
 
 </details>
 
@@ -2572,6 +2876,14 @@ DELETE logs-read
 
 8.Monitoring and Alerting
 -------------------------
+
+######
+
+<details><summary> 정답 </summary>
+
+</details>
+
+<br>
 
 <br><br><br><br><br>
 
